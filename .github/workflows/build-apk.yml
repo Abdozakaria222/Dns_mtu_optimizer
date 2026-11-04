@@ -1,1 +1,46 @@
+name: Build APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk autoconf automake libtool libtool-bin \
+            pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev build-essential ccache
+
+      - name: Cache Buildozer downloads (SDK / NDK)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+
+      - name: Install Buildozer
+        run: pip install --upgrade pip buildozer "cython<3.1" virtualenv setuptools
+
+      - name: Build debug APK
+        run: buildozer -v android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NetOptimizer-apk
+          path: bin/*.apk
+          if-no-files-found: error

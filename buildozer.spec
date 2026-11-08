@@ -16,6 +16,9 @@ fullscreen = 0
 android.permissions = INTERNET,ACCESS_NETWORK_STATE
 # API 33 + NDK 25b is the combination the stable python-for-android release is tested with.
 android.api = 33
+# Buildozer's default is python-for-android *master*, which now builds with Python 3.14 -
+# Kivy 2.3.0 cannot compile against that. Pin the tested release (Python 3.11).
+p4a.branch = v2024.01.21
 android.minapi = 24
 android.ndk = 25b
 # arm64 only: every modern phone, and a much faster / safer build.

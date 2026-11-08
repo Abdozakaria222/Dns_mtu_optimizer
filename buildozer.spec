@@ -14,9 +14,12 @@ orientation = portrait
 fullscreen = 0
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE
-android.api = 34
+# API 33 + NDK 25b is the combination the stable python-for-android release is tested with.
+android.api = 33
 android.minapi = 24
-android.archs = arm64-v8a, armeabi-v7a
+android.ndk = 25b
+# arm64 only: every modern phone, and a much faster / safer build.
+android.archs = arm64-v8a
 android.accept_sdk_license = True
 android.allow_backup = True
 

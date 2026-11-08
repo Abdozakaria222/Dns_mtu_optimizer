@@ -1,7 +1,7 @@
 name: Build APK
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:        # Actions tab -> Build APK -> Run workflow
   push:
     branches: [main, master]
 
@@ -33,10 +33,35 @@ jobs:
           key: buildozer-${{ hashFiles('buildozer.spec') }}
 
       - name: Install Buildozer
-        run: pip install --upgrade pip buildozer "cython<3.1" virtualenv setuptools
+        run: pip install --upgrade pip "buildozer==1.5.0" "Cython==0.29.37" virtualenv setuptools
 
       - name: Build debug APK
-        run: buildozer -v android debug
+        shell: bash
+        run: buildozer -v android debug 2>&1 | tee build.log
+
+      - name: Show the error on the run summary page
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Build failed"
+            echo "### Error-like lines"
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' build.log | grep -n -i -E "error|failed|not found|exception|no such" | tail -n 40 || true
+            echo '```'
+            echo "### Last 80 lines"
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' build.log | tail -n 80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -9,6 +9,8 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    permissions:
+      contents: write      # needed to push the APK branch
     steps:
       - uses: actions/checkout@v4
 
@@ -77,3 +79,19 @@ jobs:
           name: NetOptimizer-apk
           path: bin/*.apk
           if-no-files-found: error
+
+      # Keep a copy of the APK on its own branch so it can be downloaded as a plain .apk file
+      # (the repo is public, so anyone can download it).
+      - name: Publish the APK to the apk-builds branch
+        shell: bash
+        run: |
+          set -e
+          mkdir -p /tmp/apk && cp bin/*.apk /tmp/apk/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan apk-builds
+          git rm -rf . > /dev/null 2>&1 || true
+          cp /tmp/apk/*.apk .
+          git add -- ./*.apk
+          git commit -m "APK from build ${{ github.run_number }} (${{ github.sha }})"
+          git push --force origin apk-builds

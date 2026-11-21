@@ -376,6 +376,9 @@ class DnsTab(BoxLayout):
             return
         self.render(final=True)
         self.csv_text = text
+        if res.get("reason"):
+            self.why.text = "[b]Why this number[/b]\n" + res["reason"]
+            self.app.log(res["reason"])
         if path:
             self.csv_label.text = "CSV saved: " + path
             self.app.log("CSV saved: " + path)
@@ -461,6 +464,8 @@ class MtuTab(BoxLayout):
         self.best_card.add_widget(self.best_title)
         self.best_card.add_widget(self.best_detail)
         self.best_card.add_widget(self.best_help)
+        self.why = WLabel(text="", color=MUTED, font_size=sp(12))
+        self.best_card.add_widget(self.why)
         r2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
         r2.add_widget(Btn(text="Copy MTU", on_release=lambda *_: self.copy()))
         r2.add_widget(Btn(text="Share results (CSV)", accent=True, on_release=lambda *_: self.share()))
@@ -501,6 +506,7 @@ class MtuTab(BoxLayout):
         self.results, self.best, self.csv_text = [], None, ""
         self.rows.clear_widgets()
         self.best_title.text = "Best MTU: testing..."
+        self.why.text = ""
         self.best_detail.text = "Latency: -  |  Jitter: -  |  Loss: -"
         self.csv_label.text = "CSV: -"
         self.prog.value = 0
@@ -535,9 +541,8 @@ class MtuTab(BoxLayout):
         elif kind == "target":
             self.target.text = a[0]
         elif kind == "mtu_search":
-            step, payload, ok = a
-            self.app.log("Search %d: payload %d (MTU %d) -> %s" % (step, payload, payload + 28,
-                                                                  "OK" if ok else "too big"))
+            step, payload, ok, cmd, result = a
+            self.app.log("%s\n   %s  (MTU %d)" % (cmd, result, payload + 28))
         elif kind == "mtu_quality":
             self.results.append(a[0])
             self.render()

@@ -470,6 +470,33 @@ def ping_once(target, payload, df=None, timeout=2):
     return rtt is not None, rtt, out
 
 
+def classify_ping(ok, out):
+    """'reply' | 'frag' (needs fragmentation / message too long) | 'timeout' | 'error'."""
+    if ok:
+        return "reply"
+    low = (out or "").lower()
+    if any(k in low for k in ("frag needed", "message too long", "too long", "needs to be fragmented",
+                              "packet too big", "emsgsize")):
+        return "frag"
+    if "timeout" in low or "100% packet loss" in low or not low.strip() or "0 received" in low \
+            or "no answer" in low:
+        return "timeout"
+    return "error"
+
+
+def win_cmd(target, payload):
+    """The same test as typed on Windows."""
+    return "ping {} -f -l {}".format(target, payload)
+
+
+def win_result(kind, rtt=None, target="", payload=0):
+    if kind == "reply":
+        return "Reply from {}: bytes={}{}".format(target, payload, " time={}ms".format(fnum(rtt)) if rtt else "")
+    if kind == "frag":
+        return "Packet needs to be fragmented but DF set."
+    return "Request timed out."
+
+
 def _short(text, n=300):
     return " | ".join(l.strip() for l in text.splitlines() if l.strip())[:n] or "(empty)"
 
@@ -503,11 +530,18 @@ class Prober:
         return False
 
     def probe(self, payload, stop, tries=3):
+        """True if ANY of `tries` echo requests gets a reply. Sets self.last = (kind, rtt)."""
+        self.last = ("timeout", None)
         for _ in range(tries):
             if stop.is_set():
                 return False
-            if ping_once(self.target, payload, self.df)[0]:
+            ok, rtt, out = ping_once(self.target, payload, self.df)
+            kind = classify_ping(ok, out)
+            if ok:
+                self.last = (kind, rtt)
                 return True
+            if self.last[0] != "frag":
+                self.last = (kind, None)
         return False
 
     def series(self, payload, count, stop):
@@ -571,20 +605,24 @@ def run_mtu_test(target, count, stop, emit):
     emit("log", "Probe: ping {}".format(" ".join(prober.df)))
 
     step, base, top = 1, 32, 1472
-    emit("mtu_search", step, base, True)
-    step += 1
-    ok = prober.probe(top, stop)
-    emit("mtu_search", step, top, ok)
-    if ok:
+    proof = {}          # payload -> (ok, kind, rtt)
+
+    def test(payload):
+        nonlocal step
+        step += 1
+        ok = prober.probe(payload, stop)
+        kind, rtt = prober.last
+        proof[payload] = (ok, kind, rtt)
+        emit("mtu_search", step, payload, ok, win_cmd(target, payload), win_result(kind, rtt, target, payload))
+        return ok
+
+    if test(top):
         lo = top
     else:
         lo, hi = base, top
         while hi - lo > 1 and not stop.is_set():
             mid = (lo + hi) // 2
-            step += 1
-            ok = prober.probe(mid, stop)
-            emit("mtu_search", step, mid, ok)
-            if ok:
+            if test(mid):
                 lo = mid
             else:
                 hi = mid
@@ -592,7 +630,24 @@ def run_mtu_test(target, count, stop, emit):
             emit("status", "Searching... payload {}..{}".format(lo, hi))
     if stop.is_set():
         raise TestError("Stopped")
+    # confirm the boundary: lo must work again, lo+1 must fail again (guards against a lucky/unlucky reply)
+    if lo > top - 1:
+        pass
+    else:
+        if not test(lo):
+            raise TestError("Unstable result: payload {} worked once but not again. "
+                            "The network is dropping packets - try again.".format(lo))
+        if test(lo + 1):
+            lo += 1
+            while lo < top and test(lo + 1) and not stop.is_set():
+                lo += 1
     max_mtu = lo + 28
+    reason = ["{}  ->  {}".format(win_cmd(target, lo), win_result(proof[lo][1], proof[lo][2], target, lo))]
+    if lo + 1 in proof:
+        reason.append("{}  ->  {}".format(win_cmd(target, lo + 1),
+                                          win_result(proof[lo + 1][1], proof[lo + 1][2], target, lo + 1)))
+    reason.append("Largest payload that passes = {} bytes; + 28 bytes (20 IP + 8 ICMP header) = MTU {}.".format(
+        lo, max_mtu))
     emit("log", "Largest working MTU = {}. Measuring latency / jitter per size...".format(max_mtu))
 
     # ---- Phase 2: latency / jitter / loss for the max size and common sizes below it ----
@@ -619,8 +674,19 @@ def run_mtu_test(target, count, stop, emit):
 
     best = choose_best_mtu(results)
     if best:
+        if best["mtu"] == max_mtu:
+            reason.append("Best = MTU {}: the largest size that works, and its latency ({} ms) / jitter ({} ms) "
+                          "/ loss ({:.0f}%) are as good as any smaller size.".format(
+                              best["mtu"], fdisp(best["avg"]), fdisp(best["jit"]), best["loss"]))
+        else:
+            reason.append("Best = MTU {}: it is within noise of the best latency and larger than every other "
+                          "equally good size (max working MTU is {} but it was slower / lossier).".format(
+                              best["mtu"], max_mtu))
+        reason.append("Check on your PC:  {}   (should reply)   and   {}   (should say 'Packet needs to be "
+                      "fragmented')".format(win_cmd(target, best["mtu"] - 28), win_cmd(target, max_mtu - 27)))
         emit("mtu_best", best)
-    return dict(best=best, results=results, max_mtu=max_mtu, target=target, stopped=stop.is_set())
+    return dict(best=best, results=results, max_mtu=max_mtu, target=target, stopped=stop.is_set(),
+                reason="\n".join(reason))
 
 
 def save_mtu_csv(res):
@@ -641,6 +707,7 @@ def save_mtu_csv(res):
     path, text = write_csv("mtu_results" + ("_partial" if stopped else ""), header, rows)
     if best:
         append_history("MTU", str(best["mtu"]), best["avg"], best["jit"], best["loss"],
-                       "target {}; max working {}".format(res["target"], res["max_mtu"]) +
+                       "target {}; max working {}; {}".format(res["target"], res["max_mtu"],
+                                                      win_cmd(res["target"], res["max_mtu"] - 28)) +
                        ("; partial" if stopped else ""))
     return path, text
